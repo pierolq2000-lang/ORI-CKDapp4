@@ -1,6 +1,7 @@
 import streamlit as st
 from io import BytesIO
 from datetime import datetime
+from pathlib import Path
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -8,226 +9,126 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
-st.markdown("""
-    <style>
-    /* Ocultar menú y header */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-
-    /* Eliminar padding superior del body */
-    .block-container {
-        padding-top: 0rem !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
+from translations import option_label, translate
 
 st.set_page_config(layout="wide")
 
-# --- DATA DICTIONARIES ---
+# Language options are defined locally so the selector always displays them,
+# independently of the contents or cache state of translations.py.
+LANGUAGE_OPTIONS = {
+    "English": "en",
+    "Español": "es",
+    "Deutsch": "de",
+    "Português": "pt",
+    "Français": "fr",
+}
+
+# Canonical internal values remain in English so translations never alter scoring.
 xerop = {"Never": 0, "Sometimes": 1, "Always": 2}
 medop = {"No": 0, "Yes": 1}
 diabop = {"No": 0, "Yes": 1}
-
 halop = {"0": 1, "1": 1, "2": 2, "3": 2, "4": 3, "5": 3}
 candop = {"No": 0, "Yes": 2}
 lendop = {"No": 0, "Yes": 1}
 perdop = {"None": 0, "Moderate": 1, "Severe": 2}
-
 ckdop = {"0": 0, "1": 0, "2": 0, "3": 1, "4": 2, "5": 2, "Dialysis": 3}
 
-h = 552
-hf = 775
+CONTAINER_HEIGHT = 560
+IMAGE_DIR = Path(__file__).parent / "images"
 
+INDICATOR_IDS = (
+    "xerostomia", "medication", "diabetes", "halitosis",
+    "candidiasis", "tongue", "periodontal", "ckd",
+)
 
-# --- REPORT CONTENT DATA ---
-indicator_explanations = {
-    "Dry mouth / Xerostomia": (
-        "Dry mouth means your mouth often feels dry, sticky, or uncomfortable. "
-        "It may make it harder to speak, chew, swallow, or taste food."
-    ),
-    "Medications causing dry mouth": (
-        "Some medicines, such as diuretics or antihypertensive drugs, may reduce saliva "
-        "and make your mouth feel dry."
-    ),
-    "Diabetes": (
-        "Diabetes may increase the risk of gum disease, oral infection, delayed healing, "
-        "and dry mouth."
-    ),
-    "Bad breath / Halitosis": (
-        "Bad breath means an unpleasant smell from the mouth. It may be related to dry mouth, "
-        "tongue coating, gum disease, tooth decay, or oral infection."
-    ),
-    "Oral candidiasis": (
-        "Oral candidiasis is a fungal infection in the mouth. It may appear as white patches, "
-        "redness, soreness, burning, or a cotton-like feeling."
-    ),
-    "Tongue fissuring / Scrotal tongue": (
-        "A fissured tongue has deep lines, cracks, or grooves on the surface. Food or bacteria "
-        "may stay in the grooves and cause discomfort or bad breath."
-    ),
-    "Periodontal disease": (
-        "Periodontal disease, also called gum disease, affects the gums and tissues supporting "
-        "the teeth. Signs may include bleeding gums, swollen gums, bad breath, loose teeth, "
-        "or pain when chewing."
-    ),
-    "CKD stage": (
-        "CKD stage describes the severity of chronic kidney disease. A higher stage usually means "
-        "more serious kidney disease and may be associated with more oral health concerns."
-    ),
+SPECIFIC_RECOMMENDATION_KEYS = {
+    indicator_id: [
+        f"recommendation.{indicator_id}.1",
+        f"recommendation.{indicator_id}.2",
+        f"recommendation.{indicator_id}.3",
+    ]
+    for indicator_id in INDICATOR_IDS
 }
 
-specific_recommendations = {
-    "Dry mouth / Xerostomia": [
-        "Sip water frequently if this is allowed by your kidney doctor.",
-        "Use sugar-free chewing gum or sugar-free lozenges to help stimulate saliva.",
-        "Ask your dentist or doctor about saliva substitutes or dry mouth products.",
-    ],
-    "Medications causing dry mouth": [
-        "Do not stop any medication by yourself.",
-        "Ask your doctor whether your medication may be contributing to dry mouth.",
-        "Tell your dentist about all medications you are currently taking.",
-    ],
-    "Diabetes": [
-        "Maintain good blood sugar control as advised by your healthcare provider.",
-        "Check your gums regularly for bleeding, swelling, or signs of infection.",
-        "Schedule regular dental visits because diabetes may increase the risk of gum disease.",
-    ],
-    "Bad breath / Halitosis": [
-        "Brush your teeth and tongue gently every day.",
-        "Clean between your teeth with floss or interdental brushes.",
-        "If bad breath continues, visit a dentist to check for gum disease, tooth decay, or infection.",
-    ],
-    "Oral candidiasis": [
-        "Visit a dentist or doctor if you notice white patches, soreness, burning, or a cotton-like feeling.",
-        "Avoid self-medicating without professional advice.",
-        "Keep dentures, retainers, or oral appliances clean if you use them.",
-    ],
-    "Tongue fissuring / Scrotal tongue": [
-        "Clean your tongue gently to remove trapped food or debris.",
-        "Avoid spicy, acidic, or irritating foods if your tongue feels sore.",
-        "Ask a dentist to check your tongue if there is pain, swelling, or persistent discomfort.",
-    ],
-    "Periodontal disease": [
-        "Visit a dentist or periodontist for a gum evaluation.",
-        "Professional cleaning may be needed to remove plaque and calculus.",
-        "Seek dental care if your gums bleed, swell, hurt, or if your teeth feel loose.",
-    ],
-    "CKD stage": [
-        "Keep both your kidney doctor and dentist informed about your health condition.",
-        "Ask your healthcare team before major dental procedures if you have advanced CKD or are on dialysis.",
-        "Maintain regular oral care because oral infection may affect general health.",
-    ],
-}
+GENERAL_RECOMMENDATION_KEYS = [f"general.{index}" for index in range(1, 9)]
 
-general_recommendations = [
-    "Brush your teeth gently at least twice a day using fluoride toothpaste.",
-    "Clean between your teeth daily with dental floss or interdental brushes.",
-    "Drink enough water if allowed by your kidney doctor, especially if your mouth feels dry.",
-    "Avoid smoking and limit alcohol, as they may worsen dry mouth, gum problems, and bad breath.",
-    "Visit a dentist regularly for oral examination and professional cleaning.",
-    "Tell your dentist if you have chronic kidney disease, diabetes, or take long-term medications.",
-    "Do not ignore bleeding gums, loose teeth, white patches, mouth pain, or persistent bad breath.",
-    "If you are on dialysis or have advanced CKD, discuss dental treatment timing with your healthcare team.",
-]
-
-
-# Initialize calculation state if it doesn't exist
-if 'calculated' not in st.session_state:
+if "calculated" not in st.session_state:
     st.session_state.calculated = False
-    st.session_state.total_points = 0 
+    st.session_state.total_points = 0
 
 
-# --- PDF REPORT FUNCTIONS ---
-def get_risk_level(points):
+
+def update_language():
+    selected_name = st.session_state.get("language_name", "English")
+    st.session_state.language_code = LANGUAGE_OPTIONS[selected_name]
+    st.session_state.calculated = False
+
+def tr(key: str, **kwargs) -> str:
+    """Translate using the language currently selected in the interface."""
+    return translate(st.session_state.get("language_code", "en"), key, **kwargs)
+
+
+def get_risk_id(points: int) -> str:
     if points <= 3:
-        return "Low Risk"
-    elif 4 <= points <= 6:
-        return "Moderate Risk"
-    else:
-        return "High Risk"
+        return "low"
+    if points <= 6:
+        return "moderate"
+    return "high"
 
 
-def get_risk_message(points):
-    if points <= 3:
-        return (
-            "Your current score suggests a low level of oral health-related risk. "
-            "However, maintaining good daily oral hygiene and regular dental check-ups is still important."
-        )
-    elif 4 <= points <= 6:
-        return (
-            "Your current score suggests a moderate level of oral health-related risk. "
-            "Some oral health signs may need more attention. You are advised to improve daily oral care "
-            "and consider visiting a dentist for further evaluation."
-        )
-    else:
-        return (
-            "Your current score suggests a high level of oral health-related risk. "
-            "Several oral health or medical factors may require professional attention. "
-            "You are strongly advised to consult a dentist and discuss your oral health with your healthcare team."
-        )
+def get_risk_level(points: int, language_code: str) -> str:
+    return translate(language_code, f"risk.{get_risk_id(points)}")
 
 
-def build_patient_report_pdf(patient_data, total_points):
+def get_risk_message(points: int, language_code: str) -> str:
+    return translate(language_code, f"pdf.{get_risk_id(points)}_message")
+
+
+def build_patient_report_pdf(
+    patient_name: str,
+    patient_data: list[dict],
+    total_points: int,
+    language_code: str,
+) -> BytesIO:
     buffer = BytesIO()
-
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
         rightMargin=40,
         leftMargin=40,
         topMargin=40,
-        bottomMargin=40
+        bottomMargin=40,
     )
 
     styles = getSampleStyleSheet()
-
     title_style = ParagraphStyle(
-        "TitleStyle",
-        parent=styles["Title"],
-        fontSize=18,
-        leading=22,
-        spaceAfter=16
+        "TitleStyle", parent=styles["Title"], fontSize=18,
+        leading=22, spaceAfter=16,
     )
-
     heading_style = ParagraphStyle(
-        "HeadingStyle",
-        parent=styles["Heading2"],
-        fontSize=13,
-        leading=16,
-        spaceBefore=12,
-        spaceAfter=8
+        "HeadingStyle", parent=styles["Heading2"], fontSize=13,
+        leading=16, spaceBefore=12, spaceAfter=8,
     )
-
     normal_style = ParagraphStyle(
-        "NormalStyle",
-        parent=styles["Normal"],
-        fontSize=10,
-        leading=14
+        "NormalStyle", parent=styles["Normal"], fontSize=10, leading=14,
     )
-
     small_style = ParagraphStyle(
-        "SmallStyle",
-        parent=styles["Normal"],
-        fontSize=8,
-        leading=11,
-        textColor=colors.grey
+        "SmallStyle", parent=styles["Normal"], fontSize=8,
+        leading=11, textColor=colors.grey,
     )
 
-    elements = []
-
-    elements.append(Paragraph("Oral Health & CKD Risk Calculator Report", title_style))
-    elements.append(Paragraph(f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
-    elements.append(Spacer(1, 12))
-
-    risk_level = get_risk_level(total_points)
-    risk_message = get_risk_message(total_points)
-
-    summary_data = [
-        ["Total Score", str(total_points)],
-        ["Risk Category", risk_level]
+    t = lambda key: translate(language_code, key)
+    elements = [
+        Paragraph(t("pdf.title"), title_style),
+        Paragraph(f"<b>{t('pdf.patient_name')}:</b> {patient_name}", normal_style),
+        Paragraph(
+            f"{t('pdf.generated')}: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            normal_style,
+        ),
+        Spacer(1, 12),
     ]
 
+    summary_data = [[t("pdf.risk_category"), get_risk_level(total_points, language_code)]]
     summary_table = Table(summary_data, colWidths=[2.2 * inch, 3.8 * inch])
     summary_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
@@ -238,24 +139,23 @@ def build_patient_report_pdf(patient_data, total_points):
         ("PADDING", (0, 0), (-1, -1), 8),
     ]))
 
-    elements.append(Paragraph("Risk Assessment Summary", heading_style))
-    elements.append(summary_table)
-    elements.append(Spacer(1, 10))
-    elements.append(Paragraph(risk_message, normal_style))
-    elements.append(Spacer(1, 14))
+    elements.extend([
+        Paragraph(t("pdf.risk_summary"), heading_style),
+        summary_table,
+        Spacer(1, 10),
+        Paragraph(get_risk_message(total_points, language_code), normal_style),
+        Spacer(1, 14),
+        Paragraph(t("pdf.patient_responses"), heading_style),
+    ])
 
-    elements.append(Paragraph("Patient Responses and Scores", heading_style))
-
-    table_data = [["Indicator", "Patient Response", "Score"]]
-
+    table_data = [[t("pdf.indicator"), t("pdf.response")]]
     for item in patient_data:
         table_data.append([
-            Paragraph(item["indicator"], normal_style),
-            Paragraph(str(item["response"]), normal_style),
-            Paragraph(str(item["score"]), normal_style)
+            Paragraph(t(f"indicator.{item['id']}"), normal_style),
+            Paragraph(option_label(language_code, str(item["response"])), normal_style),
         ])
 
-    indicator_table = Table(table_data, colWidths=[2.7 * inch, 2.4 * inch, 0.8 * inch])
+    indicator_table = Table(table_data, colWidths=[2.7 * inch, 3.3 * inch])
     indicator_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
@@ -265,502 +165,619 @@ def build_patient_report_pdf(patient_data, total_points):
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("PADDING", (0, 0), (-1, -1), 6),
     ]))
-
-    elements.append(indicator_table)
-    elements.append(Spacer(1, 14))
-
-    elements.append(Paragraph("What Each Indicator Means", heading_style))
+    elements.extend([indicator_table, Spacer(1, 14)])
+    elements.append(Paragraph(t("pdf.indicator_meaning"), heading_style))
 
     for item in patient_data:
-        indicator = item["indicator"]
-        explanation = indicator_explanations.get(indicator, "")
-        elements.append(Paragraph(f"<b>{indicator}</b>", normal_style))
-        elements.append(Paragraph(explanation, normal_style))
+        indicator_id = item["id"]
+        elements.append(Paragraph(
+            f"<b>{t(f'indicator.{indicator_id}')}</b>", normal_style
+        ))
+        elements.append(Paragraph(t(f"explanation.{indicator_id}"), normal_style))
         elements.append(Spacer(1, 6))
 
-    elements.append(Paragraph("Personalized Suggestions", heading_style))
-
+    elements.append(Paragraph(t("pdf.suggestions"), heading_style))
     added_any_specific = False
-
     for item in patient_data:
-        indicator = item["indicator"]
-        score = item["score"]
-
-        if score > 0:
-            suggestions = specific_recommendations.get(indicator, [])
-
-            if suggestions:
-                added_any_specific = True
-                elements.append(Paragraph(f"<b>{indicator}</b>", normal_style))
-
-                for suggestion in suggestions:
-                    elements.append(Paragraph(f"- {suggestion}", normal_style))
-
-                elements.append(Spacer(1, 6))
+        if item["score"] > 0:
+            added_any_specific = True
+            indicator_id = item["id"]
+            elements.append(Paragraph(
+                f"<b>{t(f'indicator.{indicator_id}')}</b>", normal_style
+            ))
+            for key in SPECIFIC_RECOMMENDATION_KEYS[indicator_id]:
+                elements.append(Paragraph(f"- {t(key)}", normal_style))
+            elements.append(Spacer(1, 6))
 
     if not added_any_specific:
-        elements.append(Paragraph(
-            "No major risk-related answers were selected. Please continue maintaining good daily oral hygiene.",
-            normal_style
-        ))
+        elements.append(Paragraph(t("pdf.no_specific"), normal_style))
 
-    elements.append(Paragraph("General Oral Health Advice", heading_style))
+    elements.append(Paragraph(t("pdf.general_advice"), heading_style))
+    for key in GENERAL_RECOMMENDATION_KEYS:
+        elements.append(Paragraph(f"- {t(key)}", normal_style))
 
-    for rec in general_recommendations:
-        elements.append(Paragraph(f"- {rec}", normal_style))
-
-    elements.append(Spacer(1, 14))
-
-    elements.append(Paragraph("Important Reminder", heading_style))
-    elements.append(Paragraph(
-        "This report is for educational and self-awareness purposes only. "
-        "It does not provide a medical diagnosis and should not replace professional advice from a dentist, "
-        "physician, nephrologist, or other healthcare provider.",
-        small_style
-    ))
+    elements.extend([
+        Spacer(1, 14),
+        Paragraph(t("pdf.reminder"), heading_style),
+        Paragraph(t("pdf.disclaimer"), small_style),
+    ])
 
     doc.build(elements)
-
     buffer.seek(0)
     return buffer
 
 
-# Create main columns (3:1 ratio)
+# Language is selected before any translated content is rendered.
+language_names = list(LANGUAGE_OPTIONS.keys())
+current_language_name = st.session_state.get("language_name", language_names[0])
+if current_language_name not in LANGUAGE_OPTIONS:
+    current_language_name = language_names[0]
+st.session_state.language_code = LANGUAGE_OPTIONS[current_language_name]
+
 col_main_left, col_final_right = st.columns([3, 1])
 
-# --- LEFT COLUMN LOGIC ---
 with col_main_left:
-    # Row 1: Title (Spans across 3 sub-columns)
-    st.title('Oral Health Index & CKD Risk Calculator')
-    st.text('This calculator aims to estimate the percentage risk by which a patient’s oral health status may contribute to the development or progression of chronic kidney disease (CKD).')
-
-
-    # -------------------------
-    # Accessibility
-    # -------------------------
-    font_option = st.selectbox(
-        "Customizable Font Size",
-        ["Small", "Medium", "Large"],
-        index=1
+    st.markdown(
+        f'<h1 class="main-app-title">{tr("app.title")}</h1>',
+        unsafe_allow_html=True,
     )
+    st.write(tr("app.intro"))
 
-    font_sizes = {
-        "Small": "13px",
-        "Medium": "15px",
-        "Large": "17px"
-    }
+    with st.expander(tr("settings.title")):
+        col_lang, col_theme, col_font = st.columns(3)
 
+        with col_lang:
+            st.subheader(tr("settings.language"))
+            selected_language_name = st.selectbox(
+                tr("settings.choose_language"),
+                language_names,
+                index=language_names.index(current_language_name),
+                key="language_name",
+                on_change=update_language,
+            )
+            st.session_state.language_code = LANGUAGE_OPTIONS[selected_language_name]
+
+        with col_theme:
+            st.subheader(tr("settings.theme"))
+            theme_option = st.selectbox(
+                tr("settings.choose_theme"),
+                ["Clear", "Dark"],
+                format_func=lambda value: tr(
+                    "theme.clear" if value == "Clear" else "theme.dark"
+                ),
+                key="theme_option",
+            )
+
+        with col_font:
+            st.subheader(tr("settings.font_size"))
+            font_option = st.selectbox(
+                tr("settings.choose_font_size"),
+                ["Small", "Medium", "Large"],
+                index=1,
+                format_func=lambda value: tr(f"font.{value.lower()}"),
+                key="font_size",
+            )
+
+    font_sizes = {"Small": "13px", "Medium": "16px", "Large": "19px"}
     selected_size = font_sizes[font_option]
 
-    st.markdown(f"""
-    <style>
+    if theme_option == "Dark":
+        theme = {
+            "background": "#0E1117",
+            "secondary_background": "#161B22",
+            "surface": "#1F2630",
+            "surface_hover": "#29313D",
+            "text": "#F3F4F6",
+            "muted_text": "#B8C0CC",
+            "border": "#3A4554",
+            "input_background": "#11161D",
+            "button_background": "#263140",
+            "button_hover": "#334155",
+            "accent": "#7DB7FF",
+            "shadow": "rgba(0, 0, 0, 0.45)",
+        }
+    else:
+        theme = {
+            "background": "#FFFFFF",
+            "secondary_background": "#F6F8FA",
+            "surface": "#FFFFFF",
+            "surface_hover": "#F1F5F9",
+            "text": "#17202A",
+            "muted_text": "#5F6B7A",
+            "border": "#D6DCE5",
+            "input_background": "#FFFFFF",
+            "button_background": "#F8FAFC",
+            "button_hover": "#EEF2F7",
+            "accent": "#1F6FEB",
+            "shadow": "rgba(15, 23, 42, 0.12)",
+        }
 
-    /* Mantener SIEMPRE el tamaño del título principal */
-    h1 {{
-        font-size: 2.5rem !important;
-    }}
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            color-scheme: {"dark" if theme_option == "Dark" else "light"};
+        }}
 
-    /* Labels */
-    label {{
-        font-size: {selected_size} !important;
-    }}
+        /* Main application background */
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] {{
+            background-color: {theme["background"]} !important;
+            color: {theme["text"]} !important;
+        }}
 
-    /* Selectboxes */
-    [data-baseweb="select"] {{
-        font-size: {selected_size} !important;
-    }}
+        [data-testid="stHeader"] {{
+            background-color: {theme["background"]} !important;
+        }}
 
-    /* Botones */
-    button {{
-        font-size: {selected_size} !important;
-    }}
+        /* Global text */
+        .stApp,
+        .stApp p,
+        .stApp li,
+        .stApp label,
+        .stApp span,
+        .stApp div,
+        .stApp h1,
+        .stApp h2,
+        .stApp h3,
+        .stApp h4,
+        .stApp h5,
+        .stApp h6,
+        [data-testid="stText"],
+        [data-testid="stCaptionContainer"] {{
+            color: {theme["text"]};
+        }}
 
-    /* Texto normal */
-    [data-testid="stMarkdownContainer"] p {{
-        font-size: {selected_size} !important;
-    }}
+        [data-testid="stCaptionContainer"],
+        [data-testid="stCaptionContainer"] p,
+        .stApp small {{
+            color: {theme["muted_text"]} !important;
+        }}
 
-    /* st.text() */
-    [data-testid="stText"] {{
-        font-size: {selected_size} !important;
-    }}
+        /* Preserve font-size customization for body/interface text */
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] li,
+        [data-testid="stText"],
+        [data-testid="stCaptionContainer"],
+        label {{
+            font-size: {selected_size} !important;
+        }}
 
-    </style>
-    """, unsafe_allow_html=True)
+        [data-baseweb="select"] *,
+        [data-baseweb="popover"] * {{
+            font-size: {selected_size} !important;
+        }}
 
-    # Row 2: Split into 3 sub-columns
+        [data-testid="stButton"] button,
+        [data-testid="stDownloadButton"] button {{
+            font-size: {selected_size} !important;
+        }}
+
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        textarea {{
+            font-size: {selected_size} !important;
+        }}
+
+        [data-testid="stCheckbox"] *,
+        [data-testid="stToggle"] * {{
+            font-size: {selected_size} !important;
+        }}
+
+        /* Bordered containers and expanders */
+        [data-testid="stVerticalBlockBorderWrapper"] {{
+            background-color: {theme["surface"]} !important;
+            border-color: {theme["border"]} !important;
+            box-shadow: 0 1px 4px {theme["shadow"]};
+        }}
+
+        [data-testid="stExpander"] {{
+            background-color: {theme["surface"]} !important;
+            border: 1px solid {theme["border"]} !important;
+            border-radius: 0.5rem;
+        }}
+
+        [data-testid="stExpander"] summary,
+        [data-testid="stExpander"] details,
+        [data-testid="stExpander"] div {{
+            color: {theme["text"]} !important;
+        }}
+
+        /* Selectboxes and popup menus */
+        [data-baseweb="select"] > div {{
+            background-color: {theme["input_background"]} !important;
+            border-color: {theme["border"]} !important;
+            color: {theme["text"]} !important;
+        }}
+
+        [data-baseweb="select"] input,
+        [data-baseweb="select"] svg {{
+            color: {theme["text"]} !important;
+            fill: {theme["text"]} !important;
+        }}
+
+        [data-baseweb="popover"],
+        [data-baseweb="popover"] > div,
+        [role="listbox"],
+        [role="option"] {{
+            background-color: {theme["surface"]} !important;
+            color: {theme["text"]} !important;
+        }}
+
+        [role="option"]:hover,
+        [aria-selected="true"] {{
+            background-color: {theme["surface_hover"]} !important;
+        }}
+
+        /* Text and number inputs */
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        textarea {{
+            background-color: {theme["input_background"]} !important;
+            border-color: {theme["border"]} !important;
+            color: {theme["text"]} !important;
+            -webkit-text-fill-color: {theme["text"]} !important;
+        }}
+
+        [data-testid="stNumberInput"] button {{
+            background-color: {theme["button_background"]} !important;
+            border-color: {theme["border"]} !important;
+            color: {theme["text"]} !important;
+        }}
+
+        /* Standard and download buttons */
+        [data-testid="stButton"] button,
+        [data-testid="stDownloadButton"] button {{
+            background-color: {theme["button_background"]} !important;
+            border: 1px solid {theme["border"]} !important;
+            color: {theme["text"]} !important;
+        }}
+
+        [data-testid="stButton"] button:hover,
+        [data-testid="stDownloadButton"] button:hover {{
+            background-color: {theme["button_hover"]} !important;
+            border-color: {theme["accent"]} !important;
+            color: {theme["text"]} !important;
+        }}
+
+        [data-testid="stButton"] button:focus,
+        [data-testid="stDownloadButton"] button:focus {{
+            border-color: {theme["accent"]} !important;
+            box-shadow: 0 0 0 0.15rem color-mix(in srgb, {theme["accent"]} 25%, transparent);
+        }}
+
+        /* Dialogs */
+        [data-testid="stDialog"] > div,
+        [role="dialog"] {{
+            background-color: {theme["surface"]} !important;
+            color: {theme["text"]} !important;
+            border: 1px solid {theme["border"]} !important;
+        }}
+
+        [role="dialog"] header,
+        [role="dialog"] section,
+        [role="dialog"] div {{
+            background-color: {theme["surface"]};
+            color: {theme["text"]};
+        }}
+
+        /* Dividers and links */
+        hr {{
+            border-color: {theme["border"]} !important;
+        }}
+
+        .stApp a {{
+            color: {theme["accent"]} !important;
+        }}
+
+        /* Toggle and checkbox labels */
+        [data-testid="stCheckbox"] label,
+        [data-testid="stToggle"] label {{
+            color: {theme["text"]} !important;
+        }}
+
+        /* Keep status boxes legible in both modes */
+        [data-testid="stAlert"] {{
+            border-color: {theme["border"]} !important;
+        }}
+
+        /* Main title should not be affected by the font-size selector */
+        .main-app-title {{
+            color: {theme["text"]} !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.expander(tr("instructions.title")):
+        st.markdown(tr("instructions.body"))
+
+    with st.expander(tr("evidence.title")):
+        st.markdown(tr("evidence.body"))
+
     sub_col1, sub_col2, sub_col3 = st.columns(3)
-    
+
     with sub_col1:
-        with st.container(height=h, border=True):
-            st.header("About you")
+        with st.container(height=CONTAINER_HEIGHT, border=True):
+            st.header(tr("section.about_you"))
 
-            # ------------------------
-            # Xerostomia
-            # ------------------------
-            @st.dialog("What is dry mouth?")
+            @st.dialog(tr("dialog.xerostomia.title"))
             def show_xerostomia_popup():
+                st.write(tr("dialog.xerostomia.body"))
+                image_path = IMAGE_DIR / "1.jpg"
+                if image_path.exists():
+                    st.image(str(image_path), use_container_width=True)
 
-                st.write("""
-                Dry mouth (xerostomia) is the feeling that your mouth is
-                unusually dry, sticky, or lacks saliva.
-
-                It may make speaking, eating, swallowing, or wearing
-                dentures more difficult.
-
-                Compare your symptoms with the reference image below.
-                """)
-
-                st.image(
-                    "images/1.jpg",
-                    use_container_width=True
-                )
-
-            col1, col2 = st.columns([8,1])
-
+            col1, col2 = st.columns([8, 1])
             with col1:
                 xer = st.selectbox(
-                    "Does your mouth often feel dry or sticky?",
-                    list(xerop.keys())
+                    tr("question.xerostomia"),
+                    list(xerop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="xer",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
-
                 if st.button("ℹ️", key="xer_info"):
                     show_xerostomia_popup()
 
-
-            # ------------------------
-            # Medications
-            # ------------------------
-            @st.dialog("Why are we asking this?")
+            @st.dialog(tr("dialog.medication.title"))
             def show_med_popup():
+                st.write(tr("dialog.medication.body"))
 
-                st.write("""
-                Some medications may reduce saliva production and
-                contribute to dry mouth.
-
-                Common examples include some blood pressure medications,
-                diuretics, antidepressants, and antihistamines.
-                """)
-
-            col1, col2 = st.columns([8,1])
-
+            col1, col2 = st.columns([8, 1])
             with col1:
                 med = st.selectbox(
-                    "Do you take any medication that causes dry mouth?",
-                    list(medop.keys())
+                    tr("question.medication"),
+                    list(medop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="med",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
-
                 if st.button("ℹ️", key="med_info"):
                     show_med_popup()
 
-
-            # ------------------------
-            # Diabetes
-            # ------------------------
-            @st.dialog("Why is diabetes important?")
+            @st.dialog(tr("dialog.diabetes.title"))
             def show_diabetes_popup():
+                st.write(tr("dialog.diabetes.body"))
 
-                st.write("""
-                Diabetes can affect oral health by increasing the risk
-                of gum disease, oral infections, delayed healing, and
-                dry mouth.
-
-                Good oral health is especially important for people
-                living with diabetes.
-                """)
-
-            col1, col2 = st.columns([8,1])
-
+            col1, col2 = st.columns([8, 1])
             with col1:
                 diab = st.selectbox(
-                    "Have you been diagnosed with diabetes?",
-                    list(diabop.keys())
+                    tr("question.diabetes"),
+                    list(diabop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="diab",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
-
                 if st.button("ℹ️", key="diab_info"):
                     show_diabetes_popup()
 
     with sub_col2:
-        with st.container(height=h, border=True):
-            st.header("Your Oral Health")
+        with st.container(height=CONTAINER_HEIGHT, border=True):
+            st.header(tr("section.oral_health"))
 
-            # ------------------------
-            # Halitosis
-            # ------------------------
-            @st.dialog("What is bad breath?")
+            @st.dialog(tr("dialog.halitosis.title"))
             def show_halitosis_popup():
-                st.write("""
-                Bad breath, also called halitosis, means an unpleasant smell
-                coming from the mouth.
-
-                It may be related to dry mouth, tongue coating, gum disease,
-                tooth decay, or oral infection.
-                """)
+                st.write(tr("dialog.halitosis.body"))
 
             col1, col2 = st.columns([8, 1])
-
             with col1:
                 hal = st.selectbox(
-                    "Do you or people close to you notice bad breath? How bad from 0 (nothing) to 5 (very bad)?",
-                    list(halop.keys())
+                    tr("question.halitosis"),
+                    list(halop.keys()),
+                    key="hal",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("ℹ️", key="hal_info"):
                     show_halitosis_popup()
 
-
-            # ------------------------
-            # Oral candidiasis
-            # ------------------------
-            @st.dialog("What is oral candidiasis?")
+            @st.dialog(tr("dialog.candidiasis.title"))
             def show_candidiasis_popup():
-                st.write("""
-                Oral candidiasis is a fungal infection that can appear inside
-                the mouth.
-
-                It may cause white patches, redness, soreness, burning,
-                or a cotton-like feeling.
-
-                Compare your symptoms with the reference image below.
-                """)
-
-                st.image("images/2.jpg", use_container_width=True)
+                st.write(tr("dialog.candidiasis.body"))
+                image_path = IMAGE_DIR / "2.jpg"
+                if image_path.exists():
+                    st.image(str(image_path), use_container_width=True)
 
             col1, col2 = st.columns([8, 1])
-
             with col1:
                 cand = st.selectbox(
-                    "Have you noticed any white patches, soreness, or a cotton-like feeling in your mouth?",
-                    list(candop.keys())
+                    tr("question.candidiasis"),
+                    list(candop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="cand",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("ℹ️", key="cand_info"):
                     show_candidiasis_popup()
 
-
-            # ------------------------
-            # Tongue fissuring
-            # ------------------------
-            @st.dialog("What is tongue fissuring?")
+            @st.dialog(tr("dialog.tongue.title"))
             def show_tongue_popup():
-                st.write("""
-                Tongue fissuring means having deep lines, cracks, or grooves
-                on the surface of the tongue.
-
-                Food or bacteria may stay inside these grooves and cause
-                discomfort, irritation, or bad breath.
-
-                Compare your symptoms with the reference image below.
-                """)
-
-                st.image("images/3.jpg", use_container_width=True)
+                st.write(tr("dialog.tongue.body"))
+                image_path = IMAGE_DIR / "3.jpg"
+                if image_path.exists():
+                    st.image(str(image_path), use_container_width=True)
 
             col1, col2 = st.columns([8, 1])
-
             with col1:
                 tongue = st.selectbox(
-                    "Does your tongue have deep lines, cracks, or grooves?",
-                    list(lendop.keys())
+                    tr("question.tongue"),
+                    list(lendop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="tongue",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("ℹ️", key="tongue_info"):
                     show_tongue_popup()
 
-
-            # ------------------------
-            # Periodontal disease
-            # ------------------------
-            @st.dialog("What is periodontal disease?")
+            @st.dialog(tr("dialog.periodontal.title"))
             def show_periodontal_popup():
-                st.write("""
-                Periodontal disease, also called gum disease, affects the gums
-                and the tissues supporting the teeth.
-
-                Signs may include bleeding gums, swollen gums, bad breath,
-                loose teeth, or pain when chewing.
-
-                Compare your symptoms with the reference image below.
-                """)
-
-                st.image("images/4.jpg", use_container_width=True)
+                st.write(tr("dialog.periodontal.body"))
+                image_path = IMAGE_DIR / "4.jpg"
+                if image_path.exists():
+                    st.image(str(image_path), use_container_width=True)
 
             col1, col2 = st.columns([8, 1])
-
             with col1:
                 per = st.selectbox(
-                    "Do your gums bleed, feel swollen, or do any teeth feel loose?",
-                    list(perdop.keys())
+                    tr("question.periodontal"),
+                    list(perdop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="per",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("ℹ️", key="per_info"):
                     show_periodontal_popup()
 
-
     with sub_col3:
-        with st.container(height=h, border=True):
-            st.header("Your Kidney Health")
+        with st.container(height=CONTAINER_HEIGHT, border=True):
+            st.header(tr("section.kidney_health"))
 
-            @st.dialog("What do CKD stages mean?")
+            @st.dialog(tr("dialog.ckd.title"))
             def show_ckd_popup():
-                st.write("""
-                CKD means Chronic Kidney Disease. It is commonly classified
-                into stages from 1 to 5 according to how well the kidneys are
-                filtering blood.
-
-                **Stage 1:** Kidney damage is present, but kidney function is
-                still normal or near normal.
-
-                **Stage 2:** Mild decrease in kidney function.
-
-                **Stage 3:** Moderate decrease in kidney function. Medical
-                follow-up becomes especially important.
-
-                **Stage 4:** Severe decrease in kidney function. The patient
-                may need preparation for advanced treatment.
-
-                **Stage 5:** Kidney failure. Dialysis or kidney transplant may
-                be needed.
-
-                **Dialysis:** A treatment that helps remove waste and extra
-                fluid from the blood when the kidneys can no longer do this
-                properly.
-                """)
+                st.write(tr("dialog.ckd.body"))
 
             col1, col2 = st.columns([8, 1])
-
             with col1:
                 ckd = st.selectbox(
-                    "What is your kidney disease stage?:",
-                    list(ckdop.keys())
+                    tr("question.ckd"),
+                    list(ckdop.keys()),
+                    format_func=lambda value: option_label(
+                        st.session_state.language_code, value
+                    ),
+                    key="ckd",
                 )
-
             with col2:
                 st.markdown("<br>", unsafe_allow_html=True)
-
                 if st.button("ℹ️", key="ckd_info"):
                     show_ckd_popup()
 
 
-
-# --- CALCULATION LOGIC ---
 def calculate_risk():
-    total = (xerop[xer] + medop[med] + diabop[diab] + 
-             halop[hal] + candop[cand] + lendop[tongue] + 
-             perdop[per] + ckdop[ckd])
+    total = (
+        xerop[xer] + medop[med] + diabop[diab] + halop[hal]
+        + candop[cand] + lendop[tongue] + perdop[per] + ckdop[ckd]
+    )
     st.session_state.total_points = total
     st.session_state.calculated = True
 
-# --- RIGHT COLUMN LOGIC (Vertical Combined) ---
+
 with col_final_right:
+    with st.container(height=CONTAINER_HEIGHT + 340, border=True):
+        st.header(tr("section.results"))
+        st.write(tr("results.intro"))
 
-    with st.container(height=hf, border=True):
-        
-        # Determine text color based on state
-        txt_col = "gray" if not st.session_state.calculated else "black"
-        
-        st.markdown(f"""
-            <div style="color: {txt_col};">
-                <h1>Risk Results</h1>
-                <p>Complete all fields and press the button below to see the risk assessment.</p>
-            </div>
-        """, unsafe_allow_html=True)
-
-        # Calculation Button
-        if st.button("Calculate Risk Score", use_container_width=True):
+        if st.button(tr("results.calculate"), use_container_width=True):
             calculate_risk()
 
         st.divider()
 
-        # Show results only if calculated
         if st.session_state.calculated:
             points = st.session_state.total_points
-            
-            if points <= 3:
-                st.success(f"## Low Risk\nScore: {points}")
-            elif 4 <= points <= 6:
-                st.warning(f"## Moderate Risk\nScore: {points}")
+            risk_id = get_risk_id(points)
+            result_text = (
+                f"## { {'low': '🟢', 'moderate': '🟡', 'high': '🔴'}[risk_id] } "
+                f"{tr(f'risk.{risk_id}')}\n"
+                f"**{tr('results.score')}:** {points}"
+            )
+
+            if risk_id == "low":
+                st.success(result_text)
+            elif risk_id == "moderate":
+                st.warning(result_text)
             else:
-                st.error(f"## High Risk\nScore: {points}")
-                
-            # Share button logic for Moderate/High risk
+                st.error(result_text)
+
+            st.write("---")
+            st.write(f"**{tr('results.interpretation')}**")
+            st.markdown(tr(f"risk.{risk_id}.interpretation"))
+            st.write(f"**{tr('results.actions')}**")
+            st.markdown(tr(f"risk.{risk_id}.actions"))
+
+            with st.expander(tr("results.disclaimer.title")):
+                st.caption(tr("results.disclaimer.body"))
+
             if points >= 4:
                 st.write("---")
-
-                # --- Paso 1: Toggle para iniciar el proceso ---
-                generate_report = st.toggle("Generate detailed PDF report")
+                generate_report = st.toggle(tr("report.toggle"))
 
                 if generate_report:
-
-                    # --- Paso 2: Datos obligatorios ---
-                    st.subheader("Patient Information")
-
-                    name = st.text_input("Full Name")
-                    age = st.number_input("Age", min_value=1, max_value=120, step=1)
-                    sex = st.selectbox("Sex", ["", "Male", "Female", "Other"])
-                    data_consent = st.checkbox("I accept the processing of my personal data")
-
+                    st.subheader(tr("report.patient_information"))
+                    name = st.text_input(tr("report.full_name"))
+                    age = st.number_input(
+                        tr("report.age"), min_value=1, max_value=120, step=1
+                    )
+                    sex = st.selectbox(
+                        tr("report.sex"),
+                        ["", "Male", "Female", "Other"],
+                        format_func=lambda value: (
+                            "" if value == "" else option_label(
+                                st.session_state.language_code, value
+                            )
+                        ),
+                    )
+                    data_consent = st.checkbox(tr("report.consent"))
                     st.write("---")
 
-                    # --- Paso 3: Validación de datos ---
                     ready_to_generate = (
-                        name.strip() != "" and
-                        sex != "" and
-                        age > 0 and
-                        data_consent
+                        bool(name.strip()) and sex != "" and age > 0 and data_consent
                     )
 
-                    # --- Paso 4: Solo si todo está listo, generar PDF y mostrar botón ---
                     if ready_to_generate:
-
                         patient_data = [
-                            {"indicator": "Dry mouth / Xerostomia", "response": xer, "score": xerop[xer]},
-                            {"indicator": "Medications causing dry mouth", "response": med, "score": medop[med]},
-                            {"indicator": "Diabetes", "response": diab, "score": diabop[diab]},
-                            {"indicator": "Bad breath / Halitosis", "response": hal, "score": halop[hal]},
-                            {"indicator": "Oral candidiasis", "response": cand, "score": candop[cand]},
-                            {"indicator": "Tongue fissuring / Scrotal tongue", "response": tongue, "score": lendop[tongue]},
-                            {"indicator": "Periodontal disease", "response": per, "score": perdop[per]},
-                            {"indicator": "CKD stage", "response": ckd, "score": ckdop[ckd]},
+                            {"id": "xerostomia", "response": xer, "score": xerop[xer]},
+                            {"id": "medication", "response": med, "score": medop[med]},
+                            {"id": "diabetes", "response": diab, "score": diabop[diab]},
+                            {"id": "halitosis", "response": hal, "score": halop[hal]},
+                            {"id": "candidiasis", "response": cand, "score": candop[cand]},
+                            {"id": "tongue", "response": tongue, "score": lendop[tongue]},
+                            {"id": "periodontal", "response": per, "score": perdop[per]},
+                            {"id": "ckd", "response": ckd, "score": ckdop[ckd]},
                         ]
-
-                        pdf_file = build_patient_report_pdf(patient_data, points)
-
+                        pdf_file = build_patient_report_pdf(
+                            name,
+                            patient_data,
+                            points,
+                            st.session_state.language_code,
+                        )
                         st.download_button(
-                            label="📄 Get My Report",
+                            label=tr("report.download"),
                             data=pdf_file,
-                            file_name="oral_ckd_risk_report.pdf",
+                            file_name=tr("report.filename"),
                             mime="application/pdf",
-                            use_container_width=True
+                            use_container_width=True,
                         )
-
                     else:
-                        # Botón fantasma (no hace nada)
                         st.button(
-                            "📄 Get My Report",
+                            tr("report.download"),
                             disabled=True,
-                            use_container_width=True
+                            use_container_width=True,
                         )
-
                 else:
-                    st.info("Activate the switch above to generate a personalized report.")
-
+                    st.info(tr("report.activate"))
         else:
-            # Initial state: gray text
-            st.markdown('<p style="color: gray;"><i>Waiting for calculation...</i></p>', unsafe_allow_html=True)
+            st.markdown(
+                f'<p style="color: gray;"><i>{tr("results.waiting")}</i></p>',
+                unsafe_allow_html=True,
+            )
